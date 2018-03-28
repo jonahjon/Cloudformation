@@ -83,7 +83,7 @@ Resources:
     Properties:
       AliasTarget:
         DNSName: !GetAtt WebAppCloudFrontDistribution.DomainName
-        HostedZoneId: Z2FDTNDATAQYW2
+        HostedZoneId: **********
       HostedZoneName: !Ref 'HostedZoneName'
       Name: !Ref 'S3BucketName'
       Type: 'A'

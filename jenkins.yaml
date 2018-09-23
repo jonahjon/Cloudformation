@@ -1,0 +1,206 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  AWS CloudFormation template to create a new VPC
+  or use an existing VPC for ECS deployment
+  in Create Cluster Wizard. Requires exactly 1
+  Instance Types for a Spot Request.
+Parameters:
+  Environment:
+    Description: Environment for Naming
+    Type: String
+    Default: dev
+    ConstraintDescription: Must be a string.
+  Urlname:
+    Description: Will be the first portion of the URL for your jenkins server
+    Type: String
+    Default: Replaceme
+    ConstraintDescription: Must be a string.
+  AmiId:
+    Type: String
+    Description: Specifies the AMI ID, using newest linux for us-east-1
+    Default: ami-0ff8a91507f77f867
+  InstanceType:
+    Type: String
+    Description: >
+      Specifies the EC2 instance type for jenkins, which is memory intensive usually
+      Defaults to m4.large
+    Default: m5.large
+    ConstraintDescription: must be a valid EC2 instance type.
+  KeyName:
+    Type: String
+    Description: >
+      Optional - Specifies the name of an existing Amazon EC2 key pair
+      to enable SSH access to the EC2 instances in your cluster.
+    Default: Replaceme
+  BucketName:
+    Type: String
+    Description: Name of s3 Backup bucket to load your jenkins content
+    Default: my-jenkins-backup
+  HostedZoneId:
+    Type: String
+    Description: ID of your hosted zone
+    Default: Replaceme
+  RootDomain:
+    Type: String
+    Description: Name of your hosted zone
+    Default: Replaceme.com.
+    
+Resources:
+
+  Jenkins:
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          jenkins_install:
+            - setup_jenkins
+        setup_jenkins:
+          packages:
+            yum:
+              tmux: []
+              docker: []
+          services:
+            sysvinit:
+              docker:
+                enabled: 'true'
+                ensureRunning: 'true'
+          files:
+            /tmp/backup.txt:
+              content: !Sub |
+                */5 * * * * aws s3 sync /var/jenkins_home > s3://${BucketName}
+              mode: "000644"
+              owner: "root"
+              group: "root"
+          commands:
+            01_install_docker:
+              command: yum install -y docker
+            02_make_jenkins_dir:
+              command: mkdir /var/jenkins_home
+            03_chown_jenkins:
+              command: chown 1000:1000 /var/jenkins_home
+            04_config_docker:
+              command: usermod -a -G docker ec2-user
+            05_start_docker:
+              command: service docker start
+            06_start_jenkins:
+              command: docker run -t -d -v /var/jenkins_home:/var/jenkins_home:z -p 80:8080 --name my-jenkins --restart=always denny/jenkins_image:latest
+              test: docker ps -a | grep -v jenkins
+            07_backup_jenkins:
+              command: crontab /tmp/backup.txt
+              test: crontab -l
+    Properties:
+      Tags:
+        - Key: stack
+          Value: !Ref Environment
+        - Key: app
+          Value: jenkins
+        - Key: Name
+          Value: !Join [ "-", [ !Ref Urlname, !Ref Environment, 'jenkins' ] ]
+      SubnetId: 
+        Fn::ImportValue: !Join [ "-", [ !Ref Environment, "PrivateAz1Subnet"] ] 
+      ImageId: !Ref AmiId
+      InstanceType: !Ref 'InstanceType'
+      SecurityGroupIds:
+        - Fn::ImportValue: !Join [ "-", [ !Ref Environment, "NaasECSSecurityGroup"] ] 
+      KeyName: !Ref 'KeyName'
+      UserData: !Base64
+        Fn::Join:
+          - ''
+          - - |
+              #!/bin/bash -xe
+            - |
+            - '/opt/aws/bin/cfn-init -v '
+            - '         --stack '
+            - !Ref 'AWS::StackName'
+            - '         --resource Jenkins '
+            - '         --configsets jenkins_install '
+            - '         --region '
+            - !Ref 'AWS::Region'
+            - |+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: 
+        !Join 
+          - '-'
+          - - 'Jenkins'
+            - !Ref Environment
+      Subnets:
+      - Fn::ImportValue: !Join [ "-", [ !Ref Environment, "PrivateAz1Subnet"] ] 
+      - Fn::ImportValue: !Join [ "-", [ !Ref Environment, "PrivateAz2Subnet"] ] 
+      Scheme: internal
+      SecurityGroups: 
+      - Fn::ImportValue: !Join [ "-", [ !Ref Environment, "JenkinsSG"] ] 
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn:
+          Ref: TargetGroup
+      LoadBalancerArn:
+        Ref: LoadBalancer
+      Port: '80'
+      Protocol: HTTP
+
+  ListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+      - Type: forward
+        TargetGroupArn:
+          Ref: TargetGroup
+      Conditions:
+      - Field: path-pattern
+        Values:
+        - "/"
+      ListenerArn:
+        Ref: Listener
+      Priority: 1
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 30
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 4
+      Matcher:
+        HttpCode: '200'
+      Name: Jenkins
+      Port: 80
+      Protocol: HTTP
+      Targets:
+      - Id:
+          Ref: Jenkins
+        Port: 80
+      UnhealthyThresholdCount: 3
+      VpcId:
+        Fn::ImportValue: !Join [ "-", [ !Ref Environment, "VPC"] ] 
+
+
+  LoadBalancerCname:
+    Type: 'AWS::Route53::RecordSet'
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Join [ ".", [ !Ref Urlname, !Ref Environment, !Ref RootDomain ] ]
+      Type: CNAME
+      TTL: '60'
+      ResourceRecords:
+      - !GetAtt LoadBalancer.DNSName
+
+  JenkinsBackUpBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Ref BucketName
+      Tags:
+        - Key: stack
+          Value: !Ref Environment
+        - Key: app
+          Value: jenkins
+ 
+Outputs:
+  WebsiteURL:
+    Value: !Join ['', ['http://', !GetAtt 'Jenkins.PublicDnsName']]
+    Description: Jenkins Website

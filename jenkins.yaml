@@ -23,6 +23,10 @@ Parameters:
       Defaults to m4.large
     Default: m5.large
     ConstraintDescription: must be a valid EC2 instance type.
+  InstanceProfile:
+    Type: String
+    Description: Specifies Instance profile for the box (Needs S3 write access to new bucket)
+    Default: Replaceme
   KeyName:
     Type: String
     Description: >
@@ -96,7 +100,8 @@ Resources:
       SubnetId: 
         Fn::ImportValue: !Join [ "-", [ !Ref Environment, "PrivateAz1Subnet"] ] 
       ImageId: !Ref AmiId
-      InstanceType: !Ref 'InstanceType'
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref InstanceProfile
       SecurityGroupIds:
         - Fn::ImportValue: !Join [ "-", [ !Ref Environment, "NaasECSSecurityGroup"] ] 
       KeyName: !Ref 'KeyName'

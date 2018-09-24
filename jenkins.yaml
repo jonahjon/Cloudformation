@@ -103,7 +103,7 @@ Resources:
       InstanceType: !Ref InstanceType
       IamInstanceProfile: !Ref InstanceProfile
       SecurityGroupIds:
-        - Fn::ImportValue: !Join [ "-", [ !Ref Environment, "NaasECSSecurityGroup"] ] 
+        - Fn::ImportValue: !Join [ "-", [ !Ref Environment, "JenkinsSG"] ] 
       KeyName: !Ref 'KeyName'
       UserData: !Base64
         Fn::Join:

@@ -172,7 +172,6 @@ Resources:
         HttpCode: '200'
       Name: Jenkins
       Port: 80
-      Port: 90
       Protocol: HTTP
       Targets:
       - Id:
